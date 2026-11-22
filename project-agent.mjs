@@ -39,12 +39,12 @@ function filePath(projectDir, relative) {
   return full;
 }
 
-async function codexResult({ root, projectDir, targetUrl, cli, feedback, annotations, source, onProgress }) {
+async function codexResult({ root, projectDir, targetUrl, feedback, annotations, source, onProgress }) {
   const resultFile = path.join(root, '.feedback', `${feedback.id}-result.txt`);
   await mkdir(path.dirname(resultFile), { recursive: true });
   onProgress('Capturing the current page…');
   const pageImage = await capturePage({ root, targetUrl, feedback }).catch(() => null);
-  const args = [cli, 'exec', '--skip-git-repo-check', '--approve-for-me', '--ephemeral', '-C', projectDir,
+  const args = ['exec', '--skip-git-repo-check', '--approve-for-me', '--ephemeral', '-C', projectDir,
     '--json', '--output-schema', path.join(root, 'agent-output.schema.json'), '-o', resultFile];
   if (pageImage) args.push('--image', pageImage);
   if (feedback.previewImage || feedback.image) args.push('--image', feedback.previewImage || feedback.image);
@@ -53,7 +53,7 @@ async function codexResult({ root, projectDir, targetUrl, cli, feedback, annotat
   const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext} The sketch is a visual design brief and must be translated into real website source code, such as React/HTML components, layout, typography, colors, borders, and CSS. Never add the sketch image, a screenshot, a canvas, or an image overlay to the website. The sketch aligns to the page coordinates. The route is ${feedback.route || '/'}, and the page dimensions are ${JSON.stringify(feedback.sketchPlacement)}. Implement the design shown in the sketch in relevant source files for that route. A successful run must change website source code. If you cannot infer a detail, make a reasonable design choice and implement the clearest interpretation; never report success without a source change. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
   onProgress(feedback.image ? 'Thinking through the sketch and page…' : 'Thinking through your design request…');
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, { cwd: projectDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.env.CODEX_CLI_EXE || 'codex.exe', args, { cwd: projectDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let errors = '';
     child.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-3000); });
     let events = '';
@@ -82,10 +82,10 @@ async function codexResult({ root, projectDir, targetUrl, cli, feedback, annotat
   });
 }
 
-export async function applyProjectRun({ root, projectDir, targetUrl, cli, feedback, annotations, onProgress = () => {} }) {
+export async function applyProjectRun({ root, projectDir, targetUrl, feedback, annotations, onProgress = () => {} }) {
   onProgress('Reading your website source…');
   const source = await sourceContext(projectDir);
-  const proposed = await codexResult({ root, projectDir, targetUrl, cli, feedback, annotations, source, onProgress });
+  const proposed = await codexResult({ root, projectDir, targetUrl, feedback, annotations, source, onProgress });
   if (!Array.isArray(proposed.files) || proposed.files.length > 8) {
     throw new Error('Codex did not return a usable website change.');
   }

@@ -12,7 +12,7 @@ const editorDir = path.join(root, 'site', 'editor');
 const feedbackDir = path.join(root, '.feedback');
 const port = Number(process.env.PORT || 4173);
 const execFileAsync = promisify(execFile);
-const cli = process.env.CODEX_CLI_JS || path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+const cli = process.env.CODEX_CLI_EXE || 'codex.exe';
 const runs = new Map();
 const types = { '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml' };
 let config = {};
@@ -78,8 +78,9 @@ async function clearApplied(sent) {
 async function startAgent(input) {
   if (!projectDir) throw Object.assign(new Error('Set projectDir in sketchtation.config.json to edit your real website.'), { status: 409 });
   if ([...runs.values()].some(run => run.status === 'running')) throw Object.assign(new Error('The agent is already working on this site.'), { status: 409 });
-  try { await readFile(cli); } catch { throw Object.assign(new Error('Codex CLI is not installed.'), { status: 503 }); }
-  try { await execFileAsync(process.execPath, [cli, 'login', 'status'], { timeout: 10000, windowsHide: true }); }
+  try { await execFileAsync(cli, ['--version'], { timeout: 10000, windowsHide: true }); }
+  catch { throw Object.assign(new Error('Codex CLI is not installed or not available on PATH.'), { status: 503 }); }
+  try { await execFileAsync(cli, ['login', 'status'], { timeout: 10000, windowsHide: true }); }
   catch { throw Object.assign(new Error('Run codex login in PowerShell, then send again.'), { status: 409 }); }
   const route = typeof input.route === 'string' && input.route.startsWith('/') && !input.route.startsWith('//') ? input.route.slice(0, 500) : '/';
   const stacked = await annotations(route);
