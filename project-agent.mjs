@@ -1,8 +1,7 @@
-import { readFile, writeFile, mkdir, readdir, stat, copyFile, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { capturePage } from './capture-page.mjs';
-import { planSketchOverlay } from './sketch-overlay.mjs';
 
 const editable = /^(?:src|public)\/[\w./$-]+\.(?:tsx?|css|html|svg)$/;
 const contextFile = /\.(?:tsx?|css|html|svg)$/;
@@ -23,7 +22,7 @@ async function sourceContext(projectDir) {
   for (const dir of ['src']) {
     try { await visit(dir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  for (const name of ['AGENTS.md', 'package.json', 'index.html', 'public/sketchtation/sketches.json']) {
+  for (const name of ['AGENTS.md', 'package.json', 'index.html']) {
     try { files[name] = await readFile(path.join(projectDir, name), 'utf8'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
@@ -32,7 +31,7 @@ async function sourceContext(projectDir) {
 }
 
 function filePath(projectDir, relative) {
-  if (relative !== 'index.html' && relative !== 'public/sketchtation/sketches.json' && !editable.test(relative)) throw new Error(`Unsupported output path: ${relative}`);
+  if (relative !== 'index.html' && !editable.test(relative)) throw new Error(`Unsupported output path: ${relative}`);
   if (relative.split('/').includes('..')) throw new Error(`Invalid output path: ${relative}`);
   const base = path.resolve(projectDir);
   const full = path.resolve(base, relative);
@@ -50,9 +49,8 @@ async function codexResult({ root, projectDir, targetUrl, cli, feedback, annotat
   if (pageImage) args.push('--image', pageImage);
   if (feedback.previewImage || feedback.image) args.push('--image', feedback.previewImage || feedback.image);
   args.push('-');
-  const sketchUrl = feedback.image ? `/sketchtation/sketches/${feedback.id}.png` : null;
   const imageContext = pageImage ? 'The first attached image is the actual page screenshot. The second, when present, is the sketch on white.' : 'The attached image, when present, is the sketch on white.';
-  const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext} The sketch aligns to the page coordinates. The route is ${feedback.route || '/'}, and the page dimensions are ${JSON.stringify(feedback.sketchPlacement)}. Sketchtation automatically places the original sketch at ${sketchUrl} on this route, so do not duplicate it. If the sketch indicates a layout or visual change, update the relevant React or CSS source around it. If the intent is only to keep the drawing as artwork, return an empty files array; the original drawing will still become part of the site. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
+  const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext} The sketch is a visual design brief and must be translated into real website source code, such as React/HTML components, layout, typography, colors, borders, and CSS. Never add the sketch image, a screenshot, a canvas, or an image overlay to the website. The sketch aligns to the page coordinates. The route is ${feedback.route || '/'}, and the page dimensions are ${JSON.stringify(feedback.sketchPlacement)}. Implement the design shown in the sketch in relevant source files for that route. A successful run must change website source code. If you cannot infer a detail, make a reasonable design choice and implement the clearest interpretation; never report success without a source change. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
   onProgress(feedback.image ? 'Thinking through the sketch and page…' : 'Thinking through your design request…');
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd: projectDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -98,10 +96,9 @@ export async function applyProjectRun({ root, projectDir, targetUrl, cli, feedba
     if (files.has(relative)) throw new Error(`Duplicate output path: ${relative}`);
     files.set(relative, item.content);
   }
-  const declined = /(?:can't reliably|cannot reliably|please describe|unable to tell)/i.test(String(proposed.summary || ''));
-  if (declined && feedback.image) files.clear();
   const modelChanged = [...files].some(([relative, content]) => source[relative] !== content);
-  await planSketchOverlay({ projectDir, feedback, source, files });
+  if (feedback.image && !modelChanged) throw new Error('No website code changed. The sketch stays in your editor; add a short note about what to build and send again.');
+  if (!modelChanged && annotations.length) throw new Error('No website code changed. Your comments remain queued; clarify the requested change and send again.');
   const changes = [];
   for (const [relative, content] of files) {
     const full = filePath(projectDir, relative);
@@ -116,12 +113,7 @@ export async function applyProjectRun({ root, projectDir, targetUrl, cli, feedba
   await mkdir(path.dirname(backup), { recursive: true });
   await writeFile(backup, JSON.stringify({ projectDir, files: changes.map(({ relative, previous }) => ({ path: relative, previous })) }, null, 2));
   const written = [];
-  const sketchDest = feedback.image ? path.join(projectDir, 'public', 'sketchtation', 'sketches', `${feedback.id}.png`) : null;
   try {
-    if (sketchDest) {
-      await mkdir(path.dirname(sketchDest), { recursive: true });
-      await copyFile(feedback.image, sketchDest);
-    }
     for (const item of changes) {
       await mkdir(path.dirname(item.full), { recursive: true });
       await writeFile(item.full, item.content);
@@ -132,9 +124,8 @@ export async function applyProjectRun({ root, projectDir, targetUrl, cli, feedba
       if (item.previous === null) await unlink(item.full).catch(() => {});
       else await writeFile(item.full, item.previous).catch(() => {});
     }
-    if (sketchDest) await unlink(sketchDest).catch(() => {});
     throw error;
   }
-  const summary = feedback.image && (!modelChanged || declined) ? `Placed your sketch on ${feedback.route || '/'} as part of the website.` : String(proposed.summary || 'Website updated.').slice(0, 500);
-  return { summary, changed: changes.map(item => item.relative), appliedCommentIds: modelChanged && !declined ? annotations.map(item => item.id) : [] };
+  const summary = String(proposed.summary || 'Website updated.').slice(0, 500);
+  return { summary, changed: changes.map(item => item.relative), appliedCommentIds: annotations.map(item => item.id) };
 }
