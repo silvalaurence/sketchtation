@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { deflateSync, inflateSync } from 'node:zlib';
 import { capturePage } from './capture-page.mjs';
 
 const editable = /^(?:src|public)\/[\w./$-]+\.(?:tsx?|css|html|svg)$/;
@@ -39,7 +40,125 @@ function filePath(projectDir, relative, allowedAsset = null) {
   return full;
 }
 
-async function codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, onProgress }) {
+const crcTable = Uint32Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
+  return crc >>> 0;
+});
+
+function pngChunk(name, data) {
+  const type = Buffer.from(name);
+  const chunk = Buffer.alloc(data.length + 12);
+  chunk.writeUInt32BE(data.length, 0);
+  type.copy(chunk, 4);
+  data.copy(chunk, 8);
+  let crc = 0xffffffff;
+  for (const byte of Buffer.concat([type, data])) crc = crcTable[(crc ^ byte) & 255] ^ (crc >>> 8);
+  chunk.writeUInt32BE((crc ^ 0xffffffff) >>> 0, data.length + 8);
+  return chunk;
+}
+
+function cropSketchPng(png, placement) {
+  if (!placement || png.toString('hex', 0, 8) !== '89504e470d0a1a0a') return null;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const imageData = [];
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString('ascii', offset + 4, offset + 8);
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+      if (data[12] !== 0) return null;
+    }
+    if (type === 'IDAT') imageData.push(data);
+    offset += length + 12;
+    if (type === 'IEND') break;
+  }
+  if (!width || !height || bitDepth !== 8 || colorType !== 6 || !placement.width || !placement.height) return null;
+
+  const stride = width * 4;
+  const decoded = inflateSync(Buffer.concat(imageData));
+  const pixels = Buffer.alloc(height * stride);
+  let inputOffset = 0;
+  const paeth = (a, b, c) => {
+    const p = a + b - c;
+    const da = Math.abs(p - a);
+    const db = Math.abs(p - b);
+    const dc = Math.abs(p - c);
+    return da <= db && da <= dc ? a : db <= dc ? b : c;
+  };
+
+  for (let y = 0; y < height; y++) {
+    const filter = decoded[inputOffset++];
+    const row = y * stride;
+    for (let i = 0; i < stride; i++) {
+      const value = decoded[inputOffset++];
+      const left = i >= 4 ? pixels[row + i - 4] : 0;
+      const above = y ? pixels[row - stride + i] : 0;
+      const upperLeft = y && i >= 4 ? pixels[row - stride + i - 4] : 0;
+      const prediction = filter === 1 ? left : filter === 2 ? above : filter === 3 ? Math.floor((left + above) / 2) : filter === 4 ? paeth(left, above, upperLeft) : 0;
+      pixels[row + i] = (value + prediction) & 255;
+    }
+  }
+
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (pixels[y * stride + x * 4 + 3] <= 8) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX || maxY < minY) return null;
+
+  const padding = 4;
+  minX = Math.max(0, minX - padding);
+  minY = Math.max(0, minY - padding);
+  maxX = Math.min(width - 1, maxX + padding);
+  maxY = Math.min(height - 1, maxY + padding);
+  const cropWidth = maxX - minX + 1;
+  const cropHeight = maxY - minY + 1;
+  const rows = Buffer.alloc(cropHeight * (cropWidth * 4 + 1));
+  for (let y = 0; y < cropHeight; y++) {
+    pixels.copy(rows, y * (cropWidth * 4 + 1) + 1, (minY + y) * stride + minX * 4, (minY + y) * stride + (minX + cropWidth) * 4);
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(cropWidth, 0);
+  header.writeUInt32BE(cropHeight, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const cropped = Buffer.concat([
+    png.subarray(0, 8),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(rows)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  const scaleX = width / placement.width;
+  const scaleY = height / placement.height;
+  const css = value => Math.round(value * 100) / 100;
+  return {
+    png: cropped,
+    bounds: {
+      left: css(minX / scaleX),
+      top: css(minY / scaleY),
+      width: css(cropWidth / scaleX),
+      height: css(cropHeight / scaleY),
+    },
+  };
+}
+
+async function codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, sketchBounds, onProgress }) {
   const resultFile = path.join(root, '.feedback', `${feedback.id}-result.txt`);
   await mkdir(path.dirname(resultFile), { recursive: true });
   onProgress('Capturing the current page…');
@@ -52,7 +171,9 @@ async function codexResult({ root, projectDir, targetUrl, feedback, annotations,
   const imageContext = pageImage ? 'The first attached image is the actual page screenshot. The second, when present, is the sketch on white.' : 'The attached image, when present, is the sketch on white.';
   const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext}
 
-The sketch and page screenshot share document coordinates: x/y are CSS pixels from the page's top-left, and the sketch covers ${JSON.stringify(feedback.sketchPlacement)}. Do not place artwork relative to the viewport, toolbar, or an arbitrary section; anchor it to the document or intended page section at the location where it was drawn. The original sketch is transparent and available as a page-sized PNG at ${sketchAssetUrl || 'unavailable'}. For hand-drawn graffiti, a character, illustration, or sticker where preserving the artist's exact marks matters, use that original PNG as a normal page design asset. Its transparent canvas preserves the exact strokes and their position. Add it as a DOM image in the relevant page component, positioned within the document/page container at the original coordinates, so it scrolls with the page. It must not be fixed to the viewport or left as Sketchtation's editor canvas. Never use the page screenshot as a website asset. When the sketch describes interface layout or components, implement those as real React/HTML/CSS elements in the corresponding areas rather than displaying the sketch as an image. For decorative artwork, use the provided transparent PNG instead of approximating the drawing with different paths.
+The sketch and page screenshot share document coordinates: x/y are CSS pixels from the page's top-left, and the full sketch canvas is ${JSON.stringify(feedback.sketchPlacement)}. The transparent asset at ${sketchAssetUrl || 'unavailable'} is cropped to the drawn marks only; its exact bounding box on the page is ${JSON.stringify(sketchBounds)}. For hand-drawn graffiti, characters, illustrations, or stickers, preserve the artist's exact marks by using this asset as a DOM image with exactly this CSS: position:absolute; left:${sketchBounds?.left}px; top:${sketchBounds?.top}px; width:${sketchBounds?.width}px; height:${sketchBounds?.height}px. Attach it to the route's page container, whose top-left is the document origin, so it scrolls with that page. Never scale this cropped image to the full page, set its width to 100%, stretch it to a page aspect ratio, move it to the viewport, or place it in Sketchtation's editor layer. Never use the page screenshot as a website asset.
+
+If the sketch represents UI structure rather than decorative artwork, create real React/HTML/CSS elements at the corresponding document coordinates. Scope any CSS changes to the intended element or route. Preserve every existing page section, component, illustration, and style unless the request clearly asks to change it. Do not reuse or override CSS selectors for artwork already present on the page; add a separate component and uniquely scoped class for this sketch. A small sketch must not trigger a global restyle, rewrite of the stylesheet, or changes to existing artwork placement. Implement only the requested design and retain all unrelated site content and layout.
 
 The route is ${feedback.route || '/'}. Implement the design in relevant source files for that route. A successful run must change website source code. If you cannot infer a detail, make a reasonable design choice and implement the clearest interpretation; never report success without a source change. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
   onProgress(feedback.image ? 'Thinking through the sketch and page…' : 'Thinking through your design request…');
@@ -89,9 +210,12 @@ The route is ${feedback.route || '/'}. Implement the design in relevant source f
 export async function applyProjectRun({ root, projectDir, targetUrl, feedback, annotations, onProgress = () => {} }) {
   onProgress('Reading your website source…');
   const source = await sourceContext(projectDir);
-  const sketchAssetRelative = feedback.image ? `public/sketchtation-art/${feedback.id}.png` : null;
+  const originalSketch = feedback.image ? await readFile(feedback.image) : null;
+  const croppedSketch = originalSketch && cropSketchPng(originalSketch, feedback.sketchPlacement);
+  const sketchBounds = croppedSketch?.bounds || null;
+  const sketchAssetRelative = croppedSketch ? `public/sketchtation-art/${feedback.id}.png` : null;
   const sketchAssetUrl = sketchAssetRelative ? `/${sketchAssetRelative.slice('public/'.length)}` : null;
-  const proposed = await codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, onProgress });
+  const proposed = await codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, sketchBounds, onProgress });
   if (!Array.isArray(proposed.files) || proposed.files.length > 8) {
     throw new Error('Codex did not return a usable website change.');
   }
@@ -124,7 +248,7 @@ export async function applyProjectRun({ root, projectDir, targetUrl, feedback, a
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
     }
-    changes.push({ relative, full, previous: null, content: await readFile(feedback.image) });
+    changes.push({ relative, full, previous: null, content: croppedSketch.png });
   }
   if (!changes.length) throw new Error('Codex made no source change. Comments remain queued.');
   onProgress('Saving the design to your website…');
