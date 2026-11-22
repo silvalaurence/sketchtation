@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "html": { "type": "string" },
+    "css": { "type": "string" },
+    "summary": { "type": "string" }
+  },
+  "required": ["html", "css", "summary"],
+  "additionalProperties": false
+}

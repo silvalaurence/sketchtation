@@ -1,0 +1,6 @@
+.feedback/
+.history/
+node_modules/
+.env
+.env.*
+*.log
