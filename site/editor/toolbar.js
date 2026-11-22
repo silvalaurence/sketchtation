@@ -29,7 +29,7 @@ const bar=document.createElement('div');
 bar.id='sketchtation';
 const svg=paths=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const icons={view:svg('<path d="m5 3 14 9-7 1-3 7-4-17Z"/>'),note:svg('<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5h5"/><circle cx="18" cy="6" r="3"/>'),draw:svg('<path d="m4 20 4.5-1 11-11a2.1 2.1 0 0 0-3-3l-11 11L4 20Z"/><path d="m14 7 3 3"/>'),erase:svg('<path d="m4 15 9-10a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3l-7 8H8l-4-4a1 1 0 0 1 0-1Z"/><path d="M8 20h12"/>'),clear:svg('<path d="M5 5l14 14M19 5 5 19"/>'),send:svg('<path d="M5 12h13m-5-5 5 5-5 5"/>')};
-const assetIcon=name=>`<img src="/site/icons/${name}.svg" alt="" aria-hidden="true">`;
+const assetIcon=name=>`<img src="/site/editor/icons/${name}.svg" alt="" aria-hidden="true">`;
 const penIcons={
   pencil:assetIcon('pencil'),
   pen:assetIcon('ballpoint-pen'),
@@ -41,7 +41,7 @@ const penIcons={
 };
 bar.innerHTML=`<div class="st-island" role="toolbar" aria-label="Sketchtation design tools"><div class="st-tools"><button data-mode="view" class="st-card active" title="Browse site" aria-label="Browse site">${icons.view}</button><button data-mode="note" class="st-card" title="Select element" aria-label="Select element">${icons.note}</button><button data-mode="draw" class="st-card" title="Draw on site" aria-label="Draw on site">${icons.draw}</button><button data-mode="erase" class="st-card" title="Erase drawing" aria-label="Erase drawing">${icons.erase}</button><span class="st-divider"></span><label class="st-card st-color" title="Ink color"><input id="st-color" type="color" value="#f24f2d" aria-label="Ink color"><span></span></label><button id="st-clear" class="st-card" title="Clear drawing" aria-label="Clear drawing">${icons.clear}</button></div><button id="st-send" class="st-send" title="Send to agent">${icons.send}<span>Send</span></button></div><div id="st-popover" class="st-popover" hidden><div class="st-pop-top"><strong>Design note</strong><button id="st-close" aria-label="Close">×</button></div><p id="st-target">Sketch or select something on the page.</p><textarea id="st-note" placeholder="Describe what you want the agent to make…"></textarea><div class="st-pop-actions"><span id="st-status">Your sketch will be saved with this note.</span><button id="st-save">Save & copy handoff</button></div></div>`;
 document.body.append(bar);
-bar.querySelector('.st-island').insertAdjacentHTML('afterbegin','<img class="st-brand" src="/site/assets/sketchtation-logo.svg" alt="Sketchtation">');
+bar.querySelector('.st-island').insertAdjacentHTML('afterbegin','<img class="st-brand" src="/site/logo.svg" alt="Sketchtation">');
 const sendTip=document.createElement('div');
 sendTip.id='st-send-tip';sendTip.hidden=true;
 sendTip.innerHTML='<span class="st-send-spinner" aria-hidden="true"></span><span class="st-send-message"></span>';

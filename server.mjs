@@ -64,11 +64,11 @@ async function placeSketch(proposed, current, feedback) {
   const present = new Set(appliedSketches(proposed.html).map(tag => tag.match(/data-sketchtation-sketch="([^"]+)"/)?.[1]));
   const additions = retained.filter(tag => !present.has(tag.match(/data-sketchtation-sketch="([^"]+)"/)?.[1]));
   if (feedback.image && feedback.sketchPlacement) {
-    const asset = path.join(siteDir, 'assets', `${feedback.id}.png`);
+    const asset = path.join(siteDir, 'sketches', `${feedback.id}.png`);
     await mkdir(path.dirname(asset), { recursive: true });
     await copyFile(feedback.image, asset);
     const { width, height } = feedback.sketchPlacement;
-    additions.push(`<img data-sketchtation-sketch="${feedback.id}" src="/site/assets/${feedback.id}.png" alt="" aria-hidden="true" style="position:absolute;left:0;top:0;width:${width}px;height:${height}px;max-width:none;pointer-events:none;mix-blend-mode:multiply;z-index:10">`);
+    additions.push(`<img data-sketchtation-sketch="${feedback.id}" src="/site/sketches/${feedback.id}.png" alt="" aria-hidden="true" style="position:absolute;left:0;top:0;width:${width}px;height:${height}px;max-width:none;pointer-events:none;mix-blend-mode:multiply;z-index:10">`);
   }
   if (additions.length) proposed.html = proposed.html.replace(/<\/body>/i, `${additions.join('')}\n</body>`);
   return proposed;
@@ -201,8 +201,8 @@ http.createServer(async (req, res) => {
     let data = await readFile(target);
     if (pathname === '/site/index.html') {
       const page = data.toString('utf8')
-        .replace('</head>', '<link rel="stylesheet" href="/site/toolbar.css"></head>')
-        .replace('</body>', '<script type="module" src="/site/toolbar.js"></script></body>');
+        .replace('</head>', '<link rel="stylesheet" href="/site/editor/toolbar.css"></head>')
+        .replace('</body>', '<script type="module" src="/site/editor/toolbar.js"></script></body>');
       data = Buffer.from(page);
     }
     res.writeHead(200, { 'Content-Type': `${types[path.extname(target)] || 'application/octet-stream'}; charset=utf-8`, 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; script-src 'self'; frame-src 'self'" });

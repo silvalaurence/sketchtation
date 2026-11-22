@@ -1,4 +1,4 @@
-<img src="site/assets/sketchtation-logo.svg" alt="Sketchtation" width="370">
+<img src="site/logo.svg" alt="Sketchtation" width="370">
 
 The live website is the canvas. A floating island toolbar sits at the bottom of the page. Sketch or select an element, write a note, and send the feedback to your coding agent. There is no API key or model call in Sketchtation.
 
@@ -14,9 +14,10 @@ The local server starts a new Codex CLI run for each Send. It does not post into
 
 ## Structure
 
-- `site/` — editable website plus modular floating toolbar files
-- `site/brushes.js` — page-anchored stroke rendering and pen behavior
-- `site/icons/` — clean SVG tool icons supplied for this project
+- `site/index.html` and `site/styles.css` — editable website
+- `site/editor/` — floating toolbar, drawing module, and tool icons
+- `site/logo.svg` — Sketchtation wordmark
+- `site/sketches/` — sketches applied to the website
 - `.feedback/` — saved comments in `annotations.json`, latest handoff in `pending.json`, and sketch PNGs
 - `.history/` — backups from the local apply endpoint
 - `server.mjs` — local web server and feedback storage
