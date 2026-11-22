@@ -1,6 +1,8 @@
 import { readFile, writeFile, mkdir, readdir, stat, copyFile, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { capturePage } from './capture-page.mjs';
+import { planSketchOverlay } from './sketch-overlay.mjs';
 
 const editable = /^(?:src|public)\/[\w./$-]+\.(?:tsx?|css|html|svg)$/;
 const contextFile = /\.(?:tsx?|css|html|svg)$/;
@@ -21,7 +23,7 @@ async function sourceContext(projectDir) {
   for (const dir of ['src']) {
     try { await visit(dir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
-  for (const name of ['AGENTS.md', 'package.json', 'index.html']) {
+  for (const name of ['AGENTS.md', 'package.json', 'index.html', 'public/sketchtation/sketches.json']) {
     try { files[name] = await readFile(path.join(projectDir, name), 'utf8'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
@@ -30,7 +32,7 @@ async function sourceContext(projectDir) {
 }
 
 function filePath(projectDir, relative) {
-  if (relative !== 'index.html' && !editable.test(relative)) throw new Error(`Unsupported output path: ${relative}`);
+  if (relative !== 'index.html' && relative !== 'public/sketchtation/sketches.json' && !editable.test(relative)) throw new Error(`Unsupported output path: ${relative}`);
   if (relative.split('/').includes('..')) throw new Error(`Invalid output path: ${relative}`);
   const base = path.resolve(projectDir);
   const full = path.resolve(base, relative);
@@ -38,20 +40,39 @@ function filePath(projectDir, relative) {
   return full;
 }
 
-async function codexResult({ root, projectDir, cli, feedback, annotations, source }) {
+async function codexResult({ root, projectDir, targetUrl, cli, feedback, annotations, source, onProgress }) {
   const resultFile = path.join(root, '.feedback', `${feedback.id}-result.txt`);
   await mkdir(path.dirname(resultFile), { recursive: true });
+  onProgress('Capturing the current page…');
+  const pageImage = await capturePage({ root, targetUrl, feedback }).catch(() => null);
   const args = [cli, 'exec', '--skip-git-repo-check', '--approve-for-me', '--ephemeral', '-C', projectDir,
-    '--output-schema', path.join(root, 'agent-output.schema.json'), '-o', resultFile];
-  if (feedback.image) args.push('--image', feedback.image);
+    '--json', '--output-schema', path.join(root, 'agent-output.schema.json'), '-o', resultFile];
+  if (pageImage) args.push('--image', pageImage);
+  if (feedback.previewImage || feedback.image) args.push('--image', feedback.previewImage || feedback.image);
   args.push('-');
   const sketchUrl = feedback.image ? `/sketchtation/sketches/${feedback.id}.png` : null;
-  const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. When a sketch is attached, make it part of the actual website design at its page coordinates. The image will be available at ${sketchUrl}; reference that URL in a changed component if you use the original drawing. The sketch page dimensions are ${JSON.stringify(feedback.sketchPlacement)}. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
+  const imageContext = pageImage ? 'The first attached image is the actual page screenshot. The second, when present, is the sketch on white.' : 'The attached image, when present, is the sketch on white.';
+  const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext} The sketch aligns to the page coordinates. The route is ${feedback.route || '/'}, and the page dimensions are ${JSON.stringify(feedback.sketchPlacement)}. Sketchtation automatically places the original sketch at ${sketchUrl} on this route, so do not duplicate it. If the sketch indicates a layout or visual change, update the relevant React or CSS source around it. If the intent is only to keep the drawing as artwork, return an empty files array; the original drawing will still become part of the site. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
+  onProgress(feedback.image ? 'Thinking through the sketch and page…' : 'Thinking through your design request…');
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, { cwd: projectDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let errors = '';
     child.stderr.on('data', chunk => { errors = (errors + chunk.toString()).slice(-3000); });
-    child.stdout.on('data', () => {});
+    let events = '';
+    child.stdout.on('data', chunk => {
+      events += chunk.toString();
+      const lines = events.split('\n');
+      events = lines.pop();
+      for (const line of lines) {
+        try {
+          const event = JSON.parse(line);
+          if (event.type === 'turn.started') onProgress('Codex is reviewing your request…');
+          if (event.type === 'item.started' && event.item?.type === 'reasoning') onProgress('Codex is planning the design change…');
+          if (event.type === 'item.started' && event.item?.type === 'agent_message') onProgress('Codex is drafting source changes…');
+          if (event.type === 'turn.completed') onProgress('Checking the proposed files…');
+        } catch {}
+      }
+    });
     child.on('error', reject);
     child.on('close', async code => {
       try {
@@ -63,31 +84,34 @@ async function codexResult({ root, projectDir, cli, feedback, annotations, sourc
   });
 }
 
-export async function applyProjectRun({ root, projectDir, cli, feedback, annotations }) {
+export async function applyProjectRun({ root, projectDir, targetUrl, cli, feedback, annotations, onProgress = () => {} }) {
+  onProgress('Reading your website source…');
   const source = await sourceContext(projectDir);
-  const proposed = await codexResult({ root, projectDir, cli, feedback, annotations, source });
-  if (!Array.isArray(proposed.files) || proposed.files.length < 1 || proposed.files.length > 8) {
+  const proposed = await codexResult({ root, projectDir, targetUrl, cli, feedback, annotations, source, onProgress });
+  if (!Array.isArray(proposed.files) || proposed.files.length > 8) {
     throw new Error('Codex did not return a usable website change.');
   }
-  const changes = [];
-  const seen = new Set();
+  const files = new Map();
   for (const item of proposed.files) {
-    if (!item || typeof item.path !== 'string' || typeof item.content !== 'string' || item.content.length > 300000) {
-      throw new Error('Codex returned an invalid source file.');
-    }
+    if (!item || typeof item.path !== 'string' || typeof item.content !== 'string' || item.content.length > 300000) throw new Error('Codex returned an invalid source file.');
     const relative = item.path.replaceAll('\\', '/');
+    if (files.has(relative)) throw new Error(`Duplicate output path: ${relative}`);
+    files.set(relative, item.content);
+  }
+  const declined = /(?:can't reliably|cannot reliably|please describe|unable to tell)/i.test(String(proposed.summary || ''));
+  if (declined && feedback.image) files.clear();
+  const modelChanged = [...files].some(([relative, content]) => source[relative] !== content);
+  await planSketchOverlay({ projectDir, feedback, source, files });
+  const changes = [];
+  for (const [relative, content] of files) {
     const full = filePath(projectDir, relative);
-    if (seen.has(relative)) throw new Error(`Duplicate output path: ${relative}`);
-    seen.add(relative);
     let previous = null;
     try { previous = await readFile(full, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (source[relative] !== previous && previous !== null) throw new Error(`The website changed while Codex worked: ${relative}`);
-    if (previous !== item.content) changes.push({ relative, full, previous, content: item.content });
+    if (previous !== content) changes.push({ relative, full, previous, content });
   }
   if (!changes.length) throw new Error('Codex made no source change. Comments remain queued.');
-  if (feedback.image && !changes.some(item => item.content.includes(`/sketchtation/sketches/${feedback.id}.png`))) {
-    throw new Error('Codex did not place the sketch in the website source. Comments remain queued.');
-  }
+  onProgress('Saving the design to your website…');
   const backup = path.join(root, '.history', `${feedback.id}.json`);
   await mkdir(path.dirname(backup), { recursive: true });
   await writeFile(backup, JSON.stringify({ projectDir, files: changes.map(({ relative, previous }) => ({ path: relative, previous })) }, null, 2));
@@ -111,5 +135,6 @@ export async function applyProjectRun({ root, projectDir, cli, feedback, annotat
     if (sketchDest) await unlink(sketchDest).catch(() => {});
     throw error;
   }
-  return { summary: String(proposed.summary || 'Website updated.').slice(0, 500), changed: changes.map(item => item.relative) };
+  const summary = feedback.image && (!modelChanged || declined) ? `Placed your sketch on ${feedback.route || '/'} as part of the website.` : String(proposed.summary || 'Website updated.').slice(0, 500);
+  return { summary, changed: changes.map(item => item.relative), appliedCommentIds: modelChanged && !declined ? annotations.map(item => item.id) : [] };
 }

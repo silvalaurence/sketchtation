@@ -42,22 +42,27 @@ function placement(value) {
     || value.width < 1 || value.height < 1 || value.width > 20000 || value.height > 20000) return null;
   return { width: Math.round(value.width), height: Math.round(value.height) };
 }
-async function annotations() {
-  try { return JSON.parse(await readFile(path.join(feedbackDir, 'annotations.json'), 'utf8')); }
+async function annotations(route = null) {
+  try { const items = JSON.parse(await readFile(path.join(feedbackDir, 'annotations.json'), 'utf8')); return route ? items.filter(item => (item.route || '/') === route) : items; }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 async function saveFeedback(input) {
   const note = String(input.note || '').slice(0, 10000).trim();
   const sketch = input.sketch;
+  const preview = input.sketchPreview;
   if (!note && !sketch) throw new Error('Add a note or sketch.');
   if (sketch && (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sketch) || sketch.length > 7000000)) throw new Error('Invalid sketch image.');
+  if (preview && (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(preview) || preview.length > 7000000)) throw new Error('Invalid sketch preview.');
   await mkdir(feedbackDir, { recursive: true });
   const id = new Date().toISOString().replace(/[:.]/g, '-');
   const image = sketch ? path.join(feedbackDir, `${id}.png`) : null;
   if (image) await writeFile(image, Buffer.from(sketch.split(',')[1], 'base64'));
+  const previewImage = image && preview ? path.join(feedbackDir, `${id}-preview.png`) : null;
+  if (previewImage) await writeFile(previewImage, Buffer.from(preview.split(',')[1], 'base64'));
+  const route = typeof input.route === 'string' && input.route.startsWith('/') && !input.route.startsWith('//') ? input.route.slice(0, 500) : '/';
   const target = input.target && typeof input.target.selector === 'string' && Number.isFinite(input.target.x) && Number.isFinite(input.target.y)
     ? { selector: input.target.selector.slice(0, 200), x: input.target.x, y: input.target.y } : null;
-  const feedback = { id, note, image, sketchPlacement: image ? placement(input.sketchPlacement) : null, target, createdAt: new Date().toISOString() };
+  const feedback = { id, note, image, previewImage, route, sketchPlacement: image ? placement(input.sketchPlacement) : null, target, createdAt: new Date().toISOString() };
   await writeFile(path.join(feedbackDir, 'pending.json'), JSON.stringify(feedback, null, 2));
   if (target) await writeFile(path.join(feedbackDir, 'annotations.json'), JSON.stringify([...(await annotations()), feedback], null, 2));
   return feedback;
@@ -76,17 +81,18 @@ async function startAgent(input) {
   try { await readFile(cli); } catch { throw Object.assign(new Error('Codex CLI is not installed.'), { status: 503 }); }
   try { await execFileAsync(process.execPath, [cli, 'login', 'status'], { timeout: 10000, windowsHide: true }); }
   catch { throw Object.assign(new Error('Run codex login in PowerShell, then send again.'), { status: 409 }); }
-  const stacked = await annotations();
+  const route = typeof input.route === 'string' && input.route.startsWith('/') && !input.route.startsWith('//') ? input.route.slice(0, 500) : '/';
+  const stacked = await annotations(route);
   if (!String(input.note || '').trim() && !input.sketch && !stacked.length) throw Object.assign(new Error('Add a sketch, comment, or design note first.'), { status: 400 });
-  const feedback = await saveFeedback({ note: String(input.note || '').trim() || (input.sketch ? 'Apply my sketch to the website design.' : 'Apply my stacked comments.'), sketch: input.sketch, sketchPlacement: input.sketchPlacement });
-  const run = { id: feedback.id, status: 'running', message: 'Codex is designing your website.', result: '' };
+  const feedback = await saveFeedback({ note: String(input.note || '').trim() || (input.sketch ? 'Apply my sketch to the website design.' : 'Apply my stacked comments.'), route, sketch: input.sketch, sketchPreview: input.sketchPreview, sketchPlacement: input.sketchPlacement });
+  const run = { id: feedback.id, status: 'running', message: 'Reading the page and your sketch…', result: '' };
   runs.set(run.id, run);
-  applyProjectRun({ root, projectDir, cli, feedback, annotations: stacked })
+  applyProjectRun({ root, projectDir, targetUrl, cli, feedback, annotations: stacked, onProgress: message => { run.message = message; } })
     .then(async result => {
-      const cleared = await clearApplied(stacked);
+      const cleared = await clearApplied(stacked.filter(item => result.appliedCommentIds.includes(item.id)));
       run.status = 'complete';
       run.message = 'Website updated.';
-      run.result = `${result.summary}${cleared ? ` Cleared ${cleared} applied comment${cleared === 1 ? '' : 's'}.` : ''}`;
+      run.result = `${result.summary}${cleared ? ` Cleared ${cleared} applied comment${cleared === 1 ? '' : 's'}.` : ''}${stacked.length > cleared ? ` ${stacked.length - cleared} comment${stacked.length - cleared === 1 ? ' remains' : 's remain'} queued.` : ''}`;
     })
     .catch(error => { run.status = 'failed'; run.message = error.message; });
   return run;
@@ -109,7 +115,7 @@ const server = http.createServer(async (req, res) => {
       return res.end(data);
     }
     if (req.method === 'GET' && url.pathname === '/__sketchtation/api/status') return send(res, 200, { targetUrl: targetUrl?.origin || null, projectDir });
-    if (req.method === 'GET' && url.pathname === '/__sketchtation/api/annotations') return send(res, 200, await annotations());
+    if (req.method === 'GET' && url.pathname === '/__sketchtation/api/annotations') return send(res, 200, await annotations(url.searchParams.get('route')));
     if (req.method === 'GET' && url.pathname === '/__sketchtation/api/run') return send(res, 200, runs.get(url.searchParams.get('id')) || { status: 'unknown', message: 'Run not found.' });
     const origin = req.headers.origin;
     if (origin && origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) return send(res, 403, { error: 'Invalid origin.' });

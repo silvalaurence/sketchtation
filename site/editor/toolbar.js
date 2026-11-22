@@ -17,6 +17,8 @@ annotation.innerHTML='<span class="st-annotation-dot" aria-hidden="true"></span>
 document.body.append(annotation);
 const toast=document.createElement('div');
 toast.id='st-toast';toast.hidden=true;document.body.append(toast);
+const routeKey=()=>location.pathname;
+let activeRoute=routeKey();
 let toastTimer;
 function showToast(text){toast.textContent=text;toast.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>toast.hidden=true,5500);}
 const markerMenu=document.createElement('div');
@@ -24,7 +26,8 @@ markerMenu.id='st-marker-menu';markerMenu.hidden=true;
 markerMenu.innerHTML='<p></p><button type="button">Remove comment</button>';
 document.body.append(markerMenu);
 function openMarker(item,pin){markerMenu.querySelector('p').textContent=item.note.split('\n')[0];markerMenu.hidden=false;const r=pin.getBoundingClientRect();markerMenu.style.left=Math.max(12,Math.min(r.right+8,innerWidth-markerMenu.offsetWidth-12))+'px';markerMenu.style.top=Math.max(12,Math.min(r.top,innerHeight-markerMenu.offsetHeight-12))+'px';markerMenu.querySelector('button').onclick=async()=>{try{const response=await fetch(`/__sketchtation/api/annotations?id=${encodeURIComponent(item.id)}`,{method:'DELETE'});const result=await response.json();if(!response.ok)throw new Error(result.error);pin.remove();markerMenu.hidden=true;document.querySelectorAll('.st-comment-pin').forEach((p,i)=>p.textContent=String(i+1));showToast('Comment removed.');}catch(error){showToast(error.message);}};}
-function showMarker(item,index){if(!item.target||document.querySelector(`[data-comment-id="${item.id}"]`))return;const pin=document.createElement('button');pin.className='st-comment-pin';pin.dataset.commentId=item.id;pin.dataset.note=item.note.split('\n')[0].slice(0,160);pin.textContent=String(index);pin.setAttribute('aria-label',`Comment ${index}: ${pin.dataset.note}`);pin.style.left=item.target.x+'px';pin.style.top=item.target.y+'px';pin.onclick=()=>openMarker(item,pin);document.body.append(pin);}
+function showMarker(item,index){if(!item.target||(item.route||'/')!==activeRoute||document.querySelector(`[data-comment-id="${item.id}"]`))return;const pin=document.createElement('button');pin.className='st-comment-pin';pin.dataset.commentId=item.id;pin.dataset.note=item.note.split('\n')[0].slice(0,160);pin.textContent=String(index);pin.setAttribute('aria-label',`Comment ${index}: ${pin.dataset.note}`);pin.style.left=item.target.x+'px';pin.style.top=item.target.y+'px';pin.onclick=()=>openMarker(item,pin);document.body.append(pin);}
+async function loadMarkers(){const route=activeRoute;try{const response=await fetch(`/__sketchtation/api/annotations?route=${encodeURIComponent(route)}`);if(!response.ok)throw new Error();const items=await response.json();if(route===activeRoute)items.forEach((item,index)=>showMarker(item,index+1));}catch{}}
 const bar=document.createElement('div');
 bar.id='sketchtation';
 const svg=paths=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
@@ -84,12 +87,17 @@ document.addEventListener('pointerdown',e=>{if(!colorPanel.contains(e.target)&&e
 setColor('#f24f2d');
 const ctx=canvas.getContext('2d');
 const highlightCtx=highlightCanvas.getContext('2d');
-let mode='view',strokes=[],current=null,selected='',annotationTarget=null,highlight=null,pinned=false,penId='pen',penSize=6,penOpacity=1;
+const draftKey='sketchtation-route-drawings-v1';
+let savedDrafts=[];
+try{savedDrafts=JSON.parse(sessionStorage.getItem(draftKey)||'[]');if(!Array.isArray(savedDrafts))savedDrafts=[];}catch{}
+const routeDrawings=new Map(savedDrafts);
+function persistDrafts(){try{sessionStorage.setItem(draftKey,JSON.stringify([...routeDrawings]));}catch{}}
+let mode='view',strokes=routeDrawings.get(activeRoute)||[],current=null,selected='',annotationTarget=null,highlight=null,pinned=false,penId='pen',penSize=6,penOpacity=1;
 const undoStack=[],redoStack=[];
 function updateHistory(){ $('st-undo').disabled=!undoStack.length;$('st-redo').disabled=!redoStack.length; }
-function commit(next){undoStack.push(strokes);redoStack.length=0;strokes=next;updateHistory();paint();}
-function undo(){if(!undoStack.length)return false;redoStack.push(strokes);strokes=undoStack.pop();updateHistory();paint();return true;}
-function redo(){if(!redoStack.length)return false;undoStack.push(strokes);strokes=redoStack.pop();updateHistory();paint();return true;}
+function commit(next){undoStack.push(strokes);redoStack.length=0;strokes=next;routeDrawings.set(activeRoute,strokes);persistDrafts();updateHistory();paint();}
+function undo(){if(!undoStack.length)return false;redoStack.push(strokes);strokes=undoStack.pop();routeDrawings.set(activeRoute,strokes);persistDrafts();updateHistory();paint();return true;}
+function redo(){if(!redoStack.length)return false;undoStack.push(strokes);strokes=redoStack.pop();routeDrawings.set(activeRoute,strokes);persistDrafts();updateHistory();paint();return true;}
 function choosePen(id){penId=id;penSize=PENS[id].size;penOpacity=PENS[id].opacity;if(id==='highlighter'&&$('st-color').value==='#f24f2d')setColor(PENS[id].color);$('st-size').value=penSize;$('st-opacity').value=Math.round(penOpacity*100);$('st-size-value').textContent=penSize;$('st-opacity-value').textContent=Math.round(penOpacity*100)+'%';$('st-pen-name').textContent=PENS[id].name;penPanel.querySelectorAll('[data-pen]').forEach(b=>{b.classList.toggle('active',b.dataset.pen===id);b.setAttribute('aria-pressed',String(b.dataset.pen===id));});bar.querySelector('[data-mode="draw"]').dataset.tip=`Draw · ${PENS[id].name}`;}
 penPanel.querySelectorAll('[data-pen]').forEach(b=>b.onclick=()=>{choosePen(b.dataset.pen);setMode('draw');penPanel.hidden=true;});
 $('st-size').oninput=e=>{penSize=Number(e.target.value);$('st-size-value').textContent=penSize;};
@@ -102,6 +110,7 @@ const scale=Math.min(devicePixelRatio||1,2);
 function pageSize(){return {width:Math.max(document.documentElement.scrollWidth,innerWidth),height:Math.max(document.documentElement.scrollHeight,innerHeight)};}
 function resize(){const size=pageSize();const width=Math.round(size.width*scale),height=Math.round(size.height*scale);if(canvas.width===width&&canvas.height===height)return;for(const layer of [canvas,highlightCanvas]){layer.style.width=size.width+'px';layer.style.height=size.height+'px';layer.width=width;layer.height=height;}paint();}
 function paint(){const all=[...strokes,...(current?[current]:[])];ctx.clearRect(0,0,canvas.width,canvas.height);highlightCtx.clearRect(0,0,highlightCanvas.width,highlightCanvas.height);renderDrawing(highlightCtx,all.filter(s=>s.tool==='highlighter'||s.tool==='erase'),scale);renderDrawing(ctx,all.filter(s=>s.tool!=='highlighter'),scale);}
+function syncRoute(){const next=routeKey();if(next===activeRoute)return;routeDrawings.set(activeRoute,strokes);persistDrafts();activeRoute=next;strokes=routeDrawings.get(next)||[];current=null;undoStack.length=0;redoStack.length=0;updateHistory();setMode('view');document.querySelectorAll('.st-comment-pin').forEach(pin=>pin.remove());markerMenu.hidden=true;resize();paint();loadMarkers();}
 const point=e=>({x:e.clientX+scrollX,y:e.clientY+scrollY,t:performance.now(),pressure:e.pressure});
 const cursorSvg={draw:icons.draw,erase:icons.erase};
 function setMode(next){mode=next;canvas.style.pointerEvents=['draw','erase'].includes(mode)?'auto':'none';canvas.style.cursor=cursorSvg[mode]?`url("data:image/svg+xml,${encodeURIComponent(cursorSvg[mode].replace('<svg ','<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" ').replace('currentColor','#253243'))}") ${mode==='draw'?'2 18':'4 17'}, crosshair`:'';bar.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('active',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});document.body.classList.toggle('st-picking',mode==='note');highlight=null;pinned=false;picker.style.display='none';annotation.hidden=true;tooltip.hidden=true;}
@@ -121,28 +130,30 @@ document.addEventListener('keydown',e=>{if(!(e.ctrlKey||e.metaKey)||e.altKey||e.
 $('st-send').onclick=()=>{colorPanel.hidden=true;$('st-color-trigger').setAttribute('aria-expanded','false');$('st-note').placeholder=strokes.length?'Turn this graffiti into a design on the website…':'Describe what you want the agent to make…';const comments=document.querySelectorAll('.st-comment-pin').length;const included=[strokes.length?'Sketch':'',comments?`${comments} comment${comments===1?'':'s'}`:''].filter(Boolean);$('st-status').textContent=included.length?included.join(' and ')+' will be sent to Codex.':'Add a note, sketch, or comment.';$('st-popover').hidden=false;$('st-note').focus();};
 $('st-close').onclick=()=>$('st-popover').hidden=true;
 function sketchImage(){if(!strokes.length)return null;const image=document.createElement('canvas');image.width=canvas.width;image.height=canvas.height;const c=image.getContext('2d');c.drawImage(highlightCanvas,0,0);c.drawImage(canvas,0,0);return image.toDataURL('image/png');}
+function sketchPreview(){if(!strokes.length)return null;const image=document.createElement('canvas');image.width=canvas.width;image.height=canvas.height;const c=image.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,image.width,image.height);c.drawImage(highlightCanvas,0,0);c.drawImage(canvas,0,0);return image.toDataURL('image/png');}
 function sketchPlacement(){const size=pageSize();return strokes.length?{width:size.width,height:size.height}:null;}
-annotation.addEventListener('submit',async e=>{e.preventDefault();const input=$('st-annotation-input');const comment=input.value.trim();if(!comment){input.focus();return;}const button=annotation.querySelector('button');button.disabled=true;try{const note=[comment,selected].filter(Boolean).join('\n\n');const response=await fetch('/__sketchtation/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,target:annotationTarget})});const feedback=await response.json();if(!response.ok)throw new Error(feedback.error);const count=document.querySelectorAll('.st-comment-pin').length+1;showMarker(feedback,count);selected='';annotationTarget=null;input.value='';input.placeholder='Add another comment…';annotation.classList.add('saved');annotation.hidden=true;showToast(`${count} comment${count===1?'':'s'} stacked. Press Send when ready.`);}catch(error){showToast(error.message||'Could not save comment');annotation.classList.remove('saved');}finally{button.disabled=false;}});
+annotation.addEventListener('submit',async e=>{e.preventDefault();const input=$('st-annotation-input');const comment=input.value.trim();if(!comment){input.focus();return;}const button=annotation.querySelector('button');button.disabled=true;try{const note=[comment,selected].filter(Boolean).join('\n\n');const response=await fetch('/__sketchtation/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,target:annotationTarget,route:activeRoute})});const feedback=await response.json();if(!response.ok)throw new Error(feedback.error);const count=document.querySelectorAll('.st-comment-pin').length+1;showMarker(feedback,count);selected='';annotationTarget=null;input.value='';input.placeholder='Add another comment…';annotation.classList.add('saved');annotation.hidden=true;showToast(`${count} comment${count===1?'':'s'} stacked. Press Send when ready.`);}catch(error){showToast(error.message||'Could not save comment');annotation.classList.remove('saved');}finally{button.disabled=false;}});
 annotation.addEventListener('keydown',e=>{if(e.key==='Escape'){annotation.hidden=true;annotation.classList.remove('saved');}});
 $('st-save').onclick=async()=>{
+  const submittedRoute=activeRoute;
   const note=[$('st-note').value.trim(),selected,strokes.length?`The sketch is aligned to the full webpage from its top-left corner. Page size: ${canvas.style.width} × ${canvas.style.height}.`:''].filter(Boolean).join('\n\n');
   const button=$('st-save');button.disabled=true;
   showSendTip('working','Sending to Codex…');
   try{
-    const response=await fetch('/__sketchtation/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,sketch:sketchImage(),sketchPlacement:sketchPlacement()})});
+    const response=await fetch('/__sketchtation/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,route:submittedRoute,sketch:sketchImage(),sketchPreview:sketchPreview(),sketchPlacement:sketchPlacement()})});
     const run=await response.json();if(!response.ok)throw new Error(run.error);
-    $('st-popover').hidden=true;showSendTip('working','Designing your website…');
+    $('st-popover').hidden=true;showSendTip('working',run.message||'Reviewing your request…');
     const timer=setInterval(async()=>{
       try{
         const result=await fetch(`/__sketchtation/api/run?id=${encodeURIComponent(run.id)}`).then(r=>r.json());
-        if(result.status==='running')return;
+        if(result.status==='running'){showSendTip('working',result.message||'Working on your website…');return;}
         clearInterval(timer);button.disabled=false;
-        if(result.status==='complete'){sessionStorage.setItem('st-last-complete','Website updated');location.reload();}
+        if(result.status==='complete'){routeDrawings.delete(submittedRoute);persistDrafts();sessionStorage.setItem('st-last-complete',result.result||'Website updated');location.reload();}
         else{showSendTip('error',result.message||'Design run failed');sendTipTimer=setTimeout(hideSendTip,7000);}
       }catch(error){clearInterval(timer);button.disabled=false;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,7000);}
     },1800);
   }catch(error){button.disabled=false;$('st-status').textContent=error.message;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,7000);}
 };
 addEventListener('resize',()=>{resize();positionPicker();});new ResizeObserver(resize).observe(document.documentElement);resize();setMode('view');
-fetch('/__sketchtation/api/annotations').then(r=>r.ok?r.json():[]).then(items=>items.forEach((item,index)=>showMarker(item,index+1))).catch(()=>{});
-if(sessionStorage.getItem('st-last-complete')){sessionStorage.removeItem('st-last-complete');showSendTip('complete','Website updated');sendTipTimer=setTimeout(hideSendTip,3500);}
+addEventListener('popstate',syncRoute);setInterval(syncRoute,200);loadMarkers();
+if(sessionStorage.getItem('st-last-complete')){const message=sessionStorage.getItem('st-last-complete');sessionStorage.removeItem('st-last-complete');showSendTip('complete',message);sendTipTimer=setTimeout(hideSendTip,5500);}
