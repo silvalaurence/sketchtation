@@ -1,4 +1,4 @@
-# Sketchtation
+<img src="site/assets/sketchtation-logo.svg" alt="Sketchtation" width="370">
 
 The live website is the canvas. A floating island toolbar sits at the bottom of the page. Sketch or select an element, write a note, and send the feedback to your coding agent. There is no API key or model call in Sketchtation.
 
