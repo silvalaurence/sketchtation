@@ -89,6 +89,7 @@ export async function applyProjectRun({ root, projectDir, targetUrl, feedback, a
   if (!Array.isArray(proposed.files) || proposed.files.length > 8) {
     throw new Error('Codex did not return a usable website change.');
   }
+  if (proposed.files.length === 0) throw new Error(`Codex returned no website code changes${proposed.summary ? `: ${String(proposed.summary).slice(0, 250)}` : '.'} Your sketch stays saved in Sketchtation. Add a short note describing what to build, then send again.`);
   const files = new Map();
   for (const item of proposed.files) {
     if (!item || typeof item.path !== 'string' || typeof item.content !== 'string' || item.content.length > 300000) throw new Error('Codex returned an invalid source file.');

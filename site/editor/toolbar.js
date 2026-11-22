@@ -149,10 +149,10 @@ $('st-save').onclick=async()=>{
         if(result.status==='running'){showSendTip('working',result.message||'Working on your website…');return;}
         clearInterval(timer);button.disabled=false;
         if(result.status==='complete'){routeDrawings.delete(submittedRoute);persistDrafts();sessionStorage.setItem('st-last-complete',result.result||'Website updated');location.reload();}
-        else{showSendTip('error',result.message||'Design run failed');sendTipTimer=setTimeout(hideSendTip,7000);}
-      }catch(error){clearInterval(timer);button.disabled=false;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,7000);}
+        else{showSendTip('error',result.message||'Design run failed');sendTipTimer=setTimeout(hideSendTip,12000);}
+      }catch(error){clearInterval(timer);button.disabled=false;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,12000);}
     },1800);
-  }catch(error){button.disabled=false;$('st-status').textContent=error.message;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,7000);}
+  }catch(error){button.disabled=false;$('st-status').textContent=error.message;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,12000);}
 };
 addEventListener('resize',()=>{resize();positionPicker();});new ResizeObserver(resize).observe(document.documentElement);resize();setMode('view');
 addEventListener('popstate',syncRoute);setInterval(syncRoute,200);loadMarkers();

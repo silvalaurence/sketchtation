@@ -90,10 +90,15 @@ async function startAgent(input) {
   runs.set(run.id, run);
   applyProjectRun({ root, projectDir, targetUrl, cli, feedback, annotations: stacked, onProgress: message => { run.message = message; } })
     .then(async result => {
+      if (!result.changed?.length) {
+        run.status = 'failed';
+        run.message = 'Codex did not change any website source files. Your sketch and comments remain saved. Add a short note about what to build, then send again.';
+        return;
+      }
       const cleared = await clearApplied(stacked.filter(item => result.appliedCommentIds.includes(item.id)));
       run.status = 'complete';
       run.message = 'Website updated.';
-      run.result = `${result.summary}${cleared ? ` Cleared ${cleared} applied comment${cleared === 1 ? '' : 's'}.` : ''}${stacked.length > cleared ? ` ${stacked.length - cleared} comment${stacked.length - cleared === 1 ? ' remains' : 's remain'} queued.` : ''}`;
+      run.result = `${result.summary} Changed ${result.changed.length} source file${result.changed.length === 1 ? '' : 's'}.${cleared ? ` Cleared ${cleared} applied comment${cleared === 1 ? '' : 's'}.` : ''}${stacked.length > cleared ? ` ${stacked.length - cleared} comment${stacked.length - cleared === 1 ? ' remains' : 's remain'} queued.` : ''}`;
     })
     .catch(error => { run.status = 'failed'; run.message = error.message; });
   return run;
