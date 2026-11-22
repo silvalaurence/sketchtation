@@ -23,13 +23,13 @@ const markerMenu=document.createElement('div');
 markerMenu.id='st-marker-menu';markerMenu.hidden=true;
 markerMenu.innerHTML='<p></p><button type="button">Remove comment</button>';
 document.body.append(markerMenu);
-function openMarker(item,pin){markerMenu.querySelector('p').textContent=item.note.split('\n')[0];markerMenu.hidden=false;const r=pin.getBoundingClientRect();markerMenu.style.left=Math.max(12,Math.min(r.right+8,innerWidth-markerMenu.offsetWidth-12))+'px';markerMenu.style.top=Math.max(12,Math.min(r.top,innerHeight-markerMenu.offsetHeight-12))+'px';markerMenu.querySelector('button').onclick=async()=>{try{const response=await fetch(`/api/annotations?id=${encodeURIComponent(item.id)}`,{method:'DELETE'});const result=await response.json();if(!response.ok)throw new Error(result.error);pin.remove();markerMenu.hidden=true;document.querySelectorAll('.st-comment-pin').forEach((p,i)=>p.textContent=String(i+1));showToast('Comment removed.');}catch(error){showToast(error.message);}};}
+function openMarker(item,pin){markerMenu.querySelector('p').textContent=item.note.split('\n')[0];markerMenu.hidden=false;const r=pin.getBoundingClientRect();markerMenu.style.left=Math.max(12,Math.min(r.right+8,innerWidth-markerMenu.offsetWidth-12))+'px';markerMenu.style.top=Math.max(12,Math.min(r.top,innerHeight-markerMenu.offsetHeight-12))+'px';markerMenu.querySelector('button').onclick=async()=>{try{const response=await fetch(`/__sketchtation/api/annotations?id=${encodeURIComponent(item.id)}`,{method:'DELETE'});const result=await response.json();if(!response.ok)throw new Error(result.error);pin.remove();markerMenu.hidden=true;document.querySelectorAll('.st-comment-pin').forEach((p,i)=>p.textContent=String(i+1));showToast('Comment removed.');}catch(error){showToast(error.message);}};}
 function showMarker(item,index){if(!item.target||document.querySelector(`[data-comment-id="${item.id}"]`))return;const pin=document.createElement('button');pin.className='st-comment-pin';pin.dataset.commentId=item.id;pin.dataset.note=item.note.split('\n')[0].slice(0,160);pin.textContent=String(index);pin.setAttribute('aria-label',`Comment ${index}: ${pin.dataset.note}`);pin.style.left=item.target.x+'px';pin.style.top=item.target.y+'px';pin.onclick=()=>openMarker(item,pin);document.body.append(pin);}
 const bar=document.createElement('div');
 bar.id='sketchtation';
 const svg=paths=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const icons={view:svg('<path d="m5 3 14 9-7 1-3 7-4-17Z"/>'),note:svg('<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7v5h5"/><circle cx="18" cy="6" r="3"/>'),draw:svg('<path d="m4 20 4.5-1 11-11a2.1 2.1 0 0 0-3-3l-11 11L4 20Z"/><path d="m14 7 3 3"/>'),erase:svg('<path d="m4 15 9-10a2 2 0 0 1 3 0l4 4a2 2 0 0 1 0 3l-7 8H8l-4-4a1 1 0 0 1 0-1Z"/><path d="M8 20h12"/>'),clear:svg('<path d="M5 5l14 14M19 5 5 19"/>'),send:svg('<path d="M5 12h13m-5-5 5 5-5 5"/>')};
-const assetIcon=name=>`<img src="/site/editor/icons/${name}.svg" alt="" aria-hidden="true">`;
+const assetIcon=name=>`<img src="/__sketchtation/editor/icons/${name}.svg" alt="" aria-hidden="true">`;
 const penIcons={
   pencil:assetIcon('pencil'),
   pen:assetIcon('ballpoint-pen'),
@@ -41,7 +41,6 @@ const penIcons={
 };
 bar.innerHTML=`<div class="st-island" role="toolbar" aria-label="Sketchtation design tools"><div class="st-tools"><button data-mode="view" class="st-card active" title="Browse site" aria-label="Browse site">${icons.view}</button><button data-mode="note" class="st-card" title="Select element" aria-label="Select element">${icons.note}</button><button data-mode="draw" class="st-card" title="Draw on site" aria-label="Draw on site">${icons.draw}</button><button data-mode="erase" class="st-card" title="Erase drawing" aria-label="Erase drawing">${icons.erase}</button><span class="st-divider"></span><label class="st-card st-color" title="Ink color"><input id="st-color" type="color" value="#f24f2d" aria-label="Ink color"><span></span></label><button id="st-clear" class="st-card" title="Clear drawing" aria-label="Clear drawing">${icons.clear}</button></div><button id="st-send" class="st-send" title="Send to agent">${icons.send}<span>Send</span></button></div><div id="st-popover" class="st-popover" hidden><div class="st-pop-top"><strong>Design note</strong><button id="st-close" aria-label="Close">×</button></div><p id="st-target">Sketch or select something on the page.</p><textarea id="st-note" placeholder="Describe what you want the agent to make…"></textarea><div class="st-pop-actions"><span id="st-status">Your sketch will be saved with this note.</span><button id="st-save">Save & copy handoff</button></div></div>`;
 document.body.append(bar);
-bar.querySelector('.st-island').insertAdjacentHTML('afterbegin','<img class="st-brand" src="/site/logo.svg" alt="Sketchtation">');
 const sendTip=document.createElement('div');
 sendTip.id='st-send-tip';sendTip.hidden=true;
 sendTip.innerHTML='<span class="st-send-spinner" aria-hidden="true"></span><span class="st-send-message"></span>';
@@ -123,19 +122,19 @@ $('st-send').onclick=()=>{colorPanel.hidden=true;$('st-color-trigger').setAttrib
 $('st-close').onclick=()=>$('st-popover').hidden=true;
 function sketchImage(){if(!strokes.length)return null;const image=document.createElement('canvas');image.width=canvas.width;image.height=canvas.height;const c=image.getContext('2d');c.drawImage(highlightCanvas,0,0);c.drawImage(canvas,0,0);return image.toDataURL('image/png');}
 function sketchPlacement(){const size=pageSize();return strokes.length?{width:size.width,height:size.height}:null;}
-annotation.addEventListener('submit',async e=>{e.preventDefault();const input=$('st-annotation-input');const comment=input.value.trim();if(!comment){input.focus();return;}const button=annotation.querySelector('button');button.disabled=true;try{const note=[comment,selected].filter(Boolean).join('\n\n');const response=await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,target:annotationTarget})});const feedback=await response.json();if(!response.ok)throw new Error(feedback.error);const count=document.querySelectorAll('.st-comment-pin').length+1;showMarker(feedback,count);selected='';annotationTarget=null;input.value='';input.placeholder='Add another comment…';annotation.classList.add('saved');annotation.hidden=true;showToast(`${count} comment${count===1?'':'s'} stacked. Press Send when ready.`);}catch(error){showToast(error.message||'Could not save comment');annotation.classList.remove('saved');}finally{button.disabled=false;}});
+annotation.addEventListener('submit',async e=>{e.preventDefault();const input=$('st-annotation-input');const comment=input.value.trim();if(!comment){input.focus();return;}const button=annotation.querySelector('button');button.disabled=true;try{const note=[comment,selected].filter(Boolean).join('\n\n');const response=await fetch('/__sketchtation/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,target:annotationTarget})});const feedback=await response.json();if(!response.ok)throw new Error(feedback.error);const count=document.querySelectorAll('.st-comment-pin').length+1;showMarker(feedback,count);selected='';annotationTarget=null;input.value='';input.placeholder='Add another comment…';annotation.classList.add('saved');annotation.hidden=true;showToast(`${count} comment${count===1?'':'s'} stacked. Press Send when ready.`);}catch(error){showToast(error.message||'Could not save comment');annotation.classList.remove('saved');}finally{button.disabled=false;}});
 annotation.addEventListener('keydown',e=>{if(e.key==='Escape'){annotation.hidden=true;annotation.classList.remove('saved');}});
 $('st-save').onclick=async()=>{
   const note=[$('st-note').value.trim(),selected,strokes.length?`The sketch is aligned to the full webpage from its top-left corner. Page size: ${canvas.style.width} × ${canvas.style.height}.`:''].filter(Boolean).join('\n\n');
   const button=$('st-save');button.disabled=true;
   showSendTip('working','Sending to Codex…');
   try{
-    const response=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,sketch:sketchImage(),sketchPlacement:sketchPlacement()})});
+    const response=await fetch('/__sketchtation/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,sketch:sketchImage(),sketchPlacement:sketchPlacement()})});
     const run=await response.json();if(!response.ok)throw new Error(run.error);
     $('st-popover').hidden=true;showSendTip('working','Designing your website…');
     const timer=setInterval(async()=>{
       try{
-        const result=await fetch(`/api/run?id=${encodeURIComponent(run.id)}`).then(r=>r.json());
+        const result=await fetch(`/__sketchtation/api/run?id=${encodeURIComponent(run.id)}`).then(r=>r.json());
         if(result.status==='running')return;
         clearInterval(timer);button.disabled=false;
         if(result.status==='complete'){sessionStorage.setItem('st-last-complete','Website updated');location.reload();}
@@ -145,5 +144,5 @@ $('st-save').onclick=async()=>{
   }catch(error){button.disabled=false;$('st-status').textContent=error.message;showSendTip('error',error.message);sendTipTimer=setTimeout(hideSendTip,7000);}
 };
 addEventListener('resize',()=>{resize();positionPicker();});new ResizeObserver(resize).observe(document.documentElement);resize();setMode('view');
-fetch('/api/annotations').then(r=>r.ok?r.json():[]).then(items=>items.forEach((item,index)=>showMarker(item,index+1))).catch(()=>{});
+fetch('/__sketchtation/api/annotations').then(r=>r.ok?r.json():[]).then(items=>items.forEach((item,index)=>showMarker(item,index+1))).catch(()=>{});
 if(sessionStorage.getItem('st-last-complete')){sessionStorage.removeItem('st-last-complete');showSendTip('complete','Website updated');sendTipTimer=setTimeout(hideSendTip,3500);}

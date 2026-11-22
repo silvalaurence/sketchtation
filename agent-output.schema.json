@@ -1,10 +1,20 @@
 {
   "type": "object",
   "properties": {
-    "html": { "type": "string" },
-    "css": { "type": "string" },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "content": { "type": "string" }
+        },
+        "required": ["path", "content"],
+        "additionalProperties": false
+      }
+    },
     "summary": { "type": "string" }
   },
-  "required": ["html", "css", "summary"],
+  "required": ["files", "summary"],
   "additionalProperties": false
 }

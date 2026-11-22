@@ -1,5 +1,6 @@
 .feedback/
 .history/
+sketchtation.config.json
 node_modules/
 .env
 .env.*

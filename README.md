@@ -1,25 +1,24 @@
 <img src="site/logo.svg" alt="Sketchtation" width="370">
 
-The live website is the canvas. A floating island toolbar sits at the bottom of the page. Sketch or select an element, write a note, and send the feedback to your coding agent. There is no API key or model call in Sketchtation.
+Sketchtation places a floating design toolbar over your real localhost website. The website remains in its own project. No OpenAI API key is needed; Send uses your signed-in local Codex CLI.
 
-## Use
+## Run
 
-1. Sign in to the local Codex CLI with `codex login` if it is not already signed in. No OpenAI API key is needed.
-2. Run `npm start` in this folder, then open `http://127.0.0.1:4173`. This opens the website directly.
-3. Draw over the website, or use **Note** to select a page element. A compact comment pill opens beside the selected element; submit a comment to leave a numbered marker. Add as many comments as you need. They stack on the page and are not sent until you press **Send**. Saving a comment does not copy file paths to your clipboard. Click a marker to view or remove that comment. The Draw button opens seven icon-based pen types with size and opacity controls; click it again to reopen the picker. Ctrl+Z undoes and Ctrl+Y redoes drawing changes when focus is outside text fields.
-4. Press **Send to agent** when your comments, sketch, and design note are ready. A status bubble above Send shows progress. The local Codex CLI receives the instruction, current site code, stacked comments, and sketch image. It returns a proposed site; Sketchtation validates and writes the HTML and CSS. Literal text changes from comments are checked against the selected element. The original sketch is placed at its page coordinates. Only comments included in a successful run are removed; comments added while the agent works remain stacked. The browser refreshes as soon as the files are saved.
-5. History stores a snapshot before each agent run.
+1. Start your website's development server.
+2. Copy `sketchtation.config.example.json` to `sketchtation.config.json` and set `targetUrl` and `projectDir`. The local config is ignored by Git.
+3. Run `npm start` in Sketchtation, then open `http://127.0.0.1:4173`. The page at `targetUrl` appears with the toolbar at the bottom.
+4. Draw directly on the page or select elements and stack comments. Comments stay on the page until you press **Send**.
+5. Press **Send** to apply the note, sketch, and stacked comments to the real website source. The page refreshes after a successful update; comments included in that run are removed. Failed runs keep their comments.
 
-The local server starts a new Codex CLI run for each Send. It does not post into an existing Codex chat. The CLI uses its own sign-in state.
+Run `codex login` once if the local CLI is not signed in. You may also set `SKETCHTATION_TARGET_URL` and `SKETCHTATION_PROJECT_DIR` environment variables instead of a config file.
 
-## Structure
+## Files
 
-- `site/index.html` and `site/styles.css` — editable website
-- `site/editor/` — floating toolbar, drawing module, and tool icons
-- `site/logo.svg` — Sketchtation wordmark
-- `site/sketches/` — sketches applied to the website
-- `.feedback/` — saved comments in `annotations.json`, latest handoff in `pending.json`, and sketch PNGs
-- `.history/` — backups from the local apply endpoint
-- `server.mjs` — local web server and feedback storage
+- `server.mjs` — local API and toolbar delivery
+- `proxy.mjs` — localhost website and development WebSocket proxy
+- `project-agent.mjs` — checked source changes from the local Codex CLI
+- `site/editor/` — dock, drawing tools, and icons
+- `site/logo.svg` — README logo
+- `.feedback/` and `.history/` — local feedback and backups, ignored by Git
 
-The pen types and drawing behavior were inspired by [Drawesome](https://github.com/benjitaylor/drawesome) by Benji Taylor (MIT). Sketchtation uses its own plain JavaScript drawing module so the toolbar can overlay a live website without React.
+The pens were inspired by [Drawesome](https://github.com/benjitaylor/drawesome) by Benji Taylor (MIT). The drawing code in this repository is independent plain JavaScript.
