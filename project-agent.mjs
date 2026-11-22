@@ -30,8 +30,8 @@ async function sourceContext(projectDir) {
   return files;
 }
 
-function filePath(projectDir, relative) {
-  if (relative !== 'index.html' && !editable.test(relative)) throw new Error(`Unsupported output path: ${relative}`);
+function filePath(projectDir, relative, allowedAsset = null) {
+  if (relative !== 'index.html' && relative !== allowedAsset && !editable.test(relative)) throw new Error(`Unsupported output path: ${relative}`);
   if (relative.split('/').includes('..')) throw new Error(`Invalid output path: ${relative}`);
   const base = path.resolve(projectDir);
   const full = path.resolve(base, relative);
@@ -39,7 +39,7 @@ function filePath(projectDir, relative) {
   return full;
 }
 
-async function codexResult({ root, projectDir, targetUrl, feedback, annotations, source, onProgress }) {
+async function codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, onProgress }) {
   const resultFile = path.join(root, '.feedback', `${feedback.id}-result.txt`);
   await mkdir(path.dirname(resultFile), { recursive: true });
   onProgress('Capturing the current page…');
@@ -50,7 +50,11 @@ async function codexResult({ root, projectDir, targetUrl, feedback, annotations,
   if (feedback.previewImage || feedback.image) args.push('--image', feedback.previewImage || feedback.image);
   args.push('-');
   const imageContext = pageImage ? 'The first attached image is the actual page screenshot. The second, when present, is the sketch on white.' : 'The attached image, when present, is the sketch on white.';
-  const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext} The sketch is a visual design brief and must be translated into real website source code, such as React/HTML components, layout, typography, colors, borders, and CSS. Never add the sketch image, a screenshot, a canvas, or an image overlay to the website. The sketch aligns to the page coordinates. The route is ${feedback.route || '/'}, and the page dimensions are ${JSON.stringify(feedback.sketchPlacement)}. Implement the design shown in the sketch in relevant source files for that route. A successful run must change website source code. If you cannot infer a detail, make a reasonable design choice and implement the clearest interpretation; never report success without a source change. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
+  const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext}
+
+The sketch and page screenshot share document coordinates: x/y are CSS pixels from the page's top-left, and the sketch covers ${JSON.stringify(feedback.sketchPlacement)}. Do not place artwork relative to the viewport, toolbar, or an arbitrary section; anchor it to the document or intended page section at the location where it was drawn. The original sketch is transparent and available as a page-sized PNG at ${sketchAssetUrl || 'unavailable'}. For hand-drawn graffiti, a character, illustration, or sticker where preserving the artist's exact marks matters, use that original PNG as a normal page design asset. Its transparent canvas preserves the exact strokes and their position. Add it as a DOM image in the relevant page component, positioned within the document/page container at the original coordinates, so it scrolls with the page. It must not be fixed to the viewport or left as Sketchtation's editor canvas. Never use the page screenshot as a website asset. When the sketch describes interface layout or components, implement those as real React/HTML/CSS elements in the corresponding areas rather than displaying the sketch as an image. For decorative artwork, use the provided transparent PNG instead of approximating the drawing with different paths.
+
+The route is ${feedback.route || '/'}. Implement the design in relevant source files for that route. A successful run must change website source code. If you cannot infer a detail, make a reasonable design choice and implement the clearest interpretation; never report success without a source change. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
   onProgress(feedback.image ? 'Thinking through the sketch and page…' : 'Thinking through your design request…');
   return new Promise((resolve, reject) => {
     const child = spawn(process.env.CODEX_CLI_EXE || 'codex.exe', args, { cwd: projectDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -85,7 +89,9 @@ async function codexResult({ root, projectDir, targetUrl, feedback, annotations,
 export async function applyProjectRun({ root, projectDir, targetUrl, feedback, annotations, onProgress = () => {} }) {
   onProgress('Reading your website source…');
   const source = await sourceContext(projectDir);
-  const proposed = await codexResult({ root, projectDir, targetUrl, feedback, annotations, source, onProgress });
+  const sketchAssetRelative = feedback.image ? `public/sketchtation-art/${feedback.id}.png` : null;
+  const sketchAssetUrl = sketchAssetRelative ? `/${sketchAssetRelative.slice('public/'.length)}` : null;
+  const proposed = await codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, onProgress });
   if (!Array.isArray(proposed.files) || proposed.files.length > 8) {
     throw new Error('Codex did not return a usable website change.');
   }
@@ -107,6 +113,18 @@ export async function applyProjectRun({ root, projectDir, targetUrl, feedback, a
     try { previous = await readFile(full, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (source[relative] !== previous && previous !== null) throw new Error(`The website changed while Codex worked: ${relative}`);
     if (previous !== content) changes.push({ relative, full, previous, content });
+  }
+  const usesOriginalSketch = sketchAssetUrl && [...files.values()].some(content => content.includes(sketchAssetUrl));
+  if (usesOriginalSketch) {
+    const relative = sketchAssetRelative;
+    const full = filePath(projectDir, relative, sketchAssetRelative);
+    try {
+      await stat(full);
+      throw new Error(`Sketch asset already exists: ${relative}`);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    changes.push({ relative, full, previous: null, content: await readFile(feedback.image) });
   }
   if (!changes.length) throw new Error('Codex made no source change. Comments remain queued.');
   onProgress('Saving the design to your website…');
