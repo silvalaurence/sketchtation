@@ -158,6 +158,26 @@ function cropSketchPng(png, placement) {
   };
 }
 
+function assertPreservedSketchArtwork(source, files) {
+  const imageTag = /<img\b[^>]*data-sketchtation-keep-art=["']([^"']+)["'][^>]*>/gs;
+  for (const [relative, original] of Object.entries(source)) {
+    const protectedImages = [...original.matchAll(imageTag)].map(match => ({
+      marker: match[1],
+      src: match[0].match(/\bsrc=["']([^"']+)["']/)?.[1],
+    }));
+    if (!protectedImages.length || !files.has(relative)) continue;
+    const proposed = files.get(relative);
+    for (const image of protectedImages) {
+      const retained = [...proposed.matchAll(imageTag)].some(match =>
+        match[1] === image.marker && match[0].match(/\bsrc=["']([^"']+)["']/)?.[1] === image.src,
+      );
+      if (!retained) {
+        throw new Error(`This change would remove a saved sketch from ${relative}. Keep each existing sketch as its own page element and add the new design separately.`);
+      }
+    }
+  }
+}
+
 async function codexResult({ root, projectDir, targetUrl, feedback, annotations, source, sketchAssetUrl, sketchBounds, onProgress }) {
   const resultFile = path.join(root, '.feedback', `${feedback.id}-result.txt`);
   await mkdir(path.dirname(resultFile), { recursive: true });
@@ -171,9 +191,9 @@ async function codexResult({ root, projectDir, targetUrl, feedback, annotations,
   const imageContext = pageImage ? 'The first attached image is the actual page screenshot. The second, when present, is the sketch on white.' : 'The attached image, when present, is the sketch on white.';
   const prompt = `You are editing the real website source. Return a JSON object matching the output schema. Do not use shell or file tools; all relevant source is below. Return complete contents for only the source files you need to change, with paths relative to the project folder. Keep the existing framework and follow AGENTS.md. Preserve unrelated content and user edits. Apply every saved annotation as an instruction on its selected element, including all requested words. ${imageContext}
 
-The sketch and page screenshot share document coordinates: x/y are CSS pixels from the page's top-left, and the full sketch canvas is ${JSON.stringify(feedback.sketchPlacement)}. The transparent asset at ${sketchAssetUrl || 'unavailable'} is cropped to the drawn marks only; its exact bounding box on the page is ${JSON.stringify(sketchBounds)}. For hand-drawn graffiti, characters, illustrations, or stickers, preserve the artist's exact marks by using this asset as a DOM image with exactly this CSS: position:absolute; left:${sketchBounds?.left}px; top:${sketchBounds?.top}px; width:${sketchBounds?.width}px; height:${sketchBounds?.height}px. Attach it to the route's page container, whose top-left is the document origin, so it scrolls with that page. Never scale this cropped image to the full page, set its width to 100%, stretch it to a page aspect ratio, move it to the viewport, or place it in Sketchtation's editor layer. Never use the page screenshot as a website asset.
+The sketch and page screenshot share document coordinates: x/y are CSS pixels from the page's top-left, and the full sketch canvas is ${JSON.stringify(feedback.sketchPlacement)}. The transparent asset at ${sketchAssetUrl || 'unavailable'} is cropped to the drawn marks only; its exact bounding box on the page is ${JSON.stringify(sketchBounds)}. For hand-drawn graffiti, characters, illustrations, or stickers, preserve the artist's exact marks by using this asset as a DOM image with exactly this CSS: position:absolute; left:${sketchBounds?.left}px; top:${sketchBounds?.top}px; width:${sketchBounds?.width}px; height:${sketchBounds?.height}px. Give every added sketch image a unique data-sketchtation-keep-art marker. Attach it to the route's page container, whose top-left is the document origin, so it scrolls with that page. Never scale this cropped image to the full page, set its width to 100%, stretch it to a page aspect ratio, move it to the viewport, or place it in Sketchtation's editor layer. Never use the page screenshot as a website asset.
 
-If the sketch represents UI structure rather than decorative artwork, create real React/HTML/CSS elements at the corresponding document coordinates. Scope any CSS changes to the intended element or route. Preserve every existing page section, component, illustration, and style unless the request clearly asks to change it. Do not reuse or override CSS selectors for artwork already present on the page; add a separate component and uniquely scoped class for this sketch. A small sketch must not trigger a global restyle, rewrite of the stylesheet, or changes to existing artwork placement. Implement only the requested design and retain all unrelated site content and layout.
+If the sketch represents UI structure rather than decorative artwork, create real React/HTML/CSS elements at the corresponding document coordinates. Scope any CSS changes to the intended element or route. Preserve every existing page section, component, illustration, and style unless the request clearly asks to change it. Every existing image marked data-sketchtation-keep-art is protected: keep its marker and exact src unchanged in the returned source. Never replace a protected image with the new sketch. Add each new design as a separate component with a uniquely scoped class. A small sketch must not trigger a global restyle, rewrite of the stylesheet, or changes to existing artwork placement. Implement only the requested design and retain all unrelated site content and layout.
 
 The route is ${feedback.route || '/'}. Implement the design in relevant source files for that route. A successful run must change website source code. If you cannot infer a detail, make a reasonable design choice and implement the clearest interpretation; never report success without a source change. Do not include the Sketchtation toolbar in output files. Respond with a brief summary.\n\nUSER NOTE:\n${feedback.note}\n\nSTACKED ANNOTATIONS:\n${JSON.stringify(annotations)}\n\nSOURCE FILES:\n${JSON.stringify(source)}`;
   onProgress(feedback.image ? 'Thinking through the sketch and page…' : 'Thinking through your design request…');
@@ -227,6 +247,7 @@ export async function applyProjectRun({ root, projectDir, targetUrl, feedback, a
     if (files.has(relative)) throw new Error(`Duplicate output path: ${relative}`);
     files.set(relative, item.content);
   }
+  assertPreservedSketchArtwork(source, files);
   const modelChanged = [...files].some(([relative, content]) => source[relative] !== content);
   if (feedback.image && !modelChanged) throw new Error('No website code changed. The sketch stays in your editor; add a short note about what to build and send again.');
   if (!modelChanged && annotations.length) throw new Error('No website code changed. Your comments remain queued; clarify the requested change and send again.');
